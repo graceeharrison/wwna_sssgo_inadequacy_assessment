@@ -1,9 +1,10 @@
 # ============================================================================
-# 01_load_data.R
-# Load all raw data from remote URLs and local files
+# 01_load_data_FIXED.R
 #
-# USE_SNAPSHOT and SNAPSHOT_DIR are set in 00_setup.R. Snapshots are saved
-# to data/snapshots/<date>/ each time live data is downloaded.
+# Fixed version: deduplicates AnnualReports_txt and Questionnaire_txt to one
+# row per WDID (most recent submission) BEFORE joining to spill data, so
+# each spill is matched to exactly one submission instead of every
+# submission on file for that system.
 # ============================================================================
 
 # ============================================================================
@@ -12,9 +13,6 @@
 
 if (!is.na(USE_SNAPSHOT)) {
   
-  # --------------------------------------------------------------------------
-  # SNAPSHOT MODE — load archived data from a specific past run
-  # --------------------------------------------------------------------------
   snap_path <- file.path(SNAPSHOT_DIR, USE_SNAPSHOT)
   
   if (!dir.exists(snap_path)) {
@@ -58,9 +56,6 @@ if (!is.na(USE_SNAPSHOT)) {
   
 } else {
   
-  # --------------------------------------------------------------------------
-  # LIVE MODE — download fresh data from remote URLs
-  # --------------------------------------------------------------------------
   message("Loading remote data...")
   
   SSO_txt <- read.delim(SSO_URL)
@@ -78,9 +73,6 @@ if (!is.na(USE_SNAPSHOT)) {
   neworder_no_spills <- read.delim(NEWORDER_URL)
   message("  New order monthly counts loaded: ", nrow(neworder_no_spills), " rows")
   
-  # --------------------------------------------------------------------------
-  # Save snapshot of this download for future reproducibility
-  # --------------------------------------------------------------------------
   snap_path <- file.path(SNAPSHOT_DIR, as.character(Sys.Date()))
   
   if (dir.exists(snap_path)) {
@@ -89,25 +81,11 @@ if (!is.na(USE_SNAPSHOT)) {
     dir.create(snap_path, recursive = TRUE)
   }
   
-  write.csv(SSO_txt,
-            file.path(snap_path, "SSO.csv"),
-            row.names = FALSE)
-  
-  write.csv(Questionnaire_txt,
-            file.path(snap_path, "Questionnaire.csv"),
-            row.names = FALSE)
-  
-  write.csv(Cat1_2_3_txt,
-            file.path(snap_path, "Cat1_2_3.csv"),
-            row.names = FALSE)
-  
-  write.csv(AnnualReports_txt,
-            file.path(snap_path, "AnnualReports.csv"),
-            row.names = FALSE)
-  
-  write.csv(neworder_no_spills,
-            file.path(snap_path, "neworder_no_spills.csv"),
-            row.names = FALSE)
+  write.csv(SSO_txt, file.path(snap_path, "SSO.csv"), row.names = FALSE)
+  write.csv(Questionnaire_txt, file.path(snap_path, "Questionnaire.csv"), row.names = FALSE)
+  write.csv(Cat1_2_3_txt, file.path(snap_path, "Cat1_2_3.csv"), row.names = FALSE)
+  write.csv(AnnualReports_txt, file.path(snap_path, "AnnualReports.csv"), row.names = FALSE)
+  write.csv(neworder_no_spills, file.path(snap_path, "neworder_no_spills.csv"), row.names = FALSE)
   
   message("Remote data downloaded and snapshot saved to: ", snap_path)
   
@@ -118,29 +96,59 @@ if (!is.na(USE_SNAPSHOT)) {
 # ============================================================================
 message("Loading local data...")
 
-# Load facilities list (complete WDID list, all needed columns)
-Facilities_List <- read.csv(here("data", "local", "CSV_CIWQS_Facilities_List_OWP_4_1_26.csv"),
+Facilities_List <- read.csv(FACILITIES_LIST_PATH,
                             na.strings = c("", "NA", "#N/A"))
 
 message("Facilities list loaded: ", nrow(Facilities_List), " rows, ",
         n_distinct(Facilities_List$WDID), " unique WDIDs")
 
-# Load enforcement order data
 enforcement_orders_CIWQS <- read.csv(ENFORCEMENT_ORDERS_PATH)
 message("  Enforcement orders loaded: ", nrow(enforcement_orders_CIWQS), " rows")
 
 # ============================================================================
-# 3. Initial Combines
+# 3. Initial Combines  --  FIXED VERSION
 # ============================================================================
 message("Combining datasets...")
 
 # Standardize Questionnaire column names
 names(Questionnaire_txt) <- toupper(names(Questionnaire_txt))
 
+# --------------------------------------------------------------------------
+# Correct implausible year-over-year jumps in AnnualReports_txt (system
+# length, population served) BEFORE deduplicating to the most recent year.
+# See apply_annual_report_corrections.R for the full rule and rationale.
+# Writes a full audit log so every correction is traceable.
+# --------------------------------------------------------------------------
+source(here("R", "apply_annual_report_corrections.R"))
+correction_result <- correct_annual_reports(AnnualReports_txt, Questionnaire_txt)
+AnnualReports_txt <- correction_result$corrected_data
+annual_report_correction_log <- correction_result$correction_log
+
+if (nrow(annual_report_correction_log) > 0) {
+  write.csv(annual_report_correction_log,
+            here("outputs", "annual_report_correction_log.csv"),
+            row.names = FALSE)
+  message("  Correction log saved to: ", here("outputs", "annual_report_correction_log.csv"))
+}
+
+# Each WDID can have multiple annual report / questionnaire submissions on
+# file (one per year). Joining on WDID alone would match every spill to
+# every submission for that system, duplicating spill records. Keep only
+# the most recent submission per WDID before joining.
+AnnualReports_latest <- AnnualReports_txt %>%
+  arrange(WDID, desc(ANNUAL_REPORT_YEAR)) %>%
+  distinct(WDID, .keep_all = TRUE)
+
+Questionnaire_latest <- Questionnaire_txt %>%
+  mutate(LAST_UPDATED_PARSED = as.Date(LAST.UPDATED.ON, format = "%m/%d/%Y")) %>%
+  arrange(WDID, desc(LAST_UPDATED_PARSED)) %>%
+  distinct(WDID, .keep_all = TRUE) %>%
+  select(-LAST_UPDATED_PARSED)
+
 # Combine SSO and Questionnaire
-SSO_Questionnaire_combined <- left_join(SSO_txt, Questionnaire_txt, by = "WDID")
+SSO_Questionnaire_combined <- left_join(SSO_txt, Questionnaire_latest, by = "WDID")
 
 # Combine Cat1-2-3 and Annual Reports
-Cat_spills_AnnualReports_combined <- left_join(Cat1_2_3_txt, AnnualReports_txt, by = "WDID")
+Cat_spills_AnnualReports_combined <- left_join(Cat1_2_3_txt, AnnualReports_latest, by = "WDID")
 
-message("Data loading complete.")
+message("Data loading complete (fixed version).")
