@@ -9,27 +9,63 @@ General Order (SSSGO). Developed for the California State Water Resources Contro
 Collection systems (sanitary sewer systems) are evaluated against two
 independent criteria:
 
-- **Criteria 1 — Spill Performance:** A system is flagged as Low Performing
-  if its spill count per scaled system length falls above the 75th
+### Criteria 1 — Spill Performance: 
+  A system is flagged as Low Performing
+  if its spill count (only includes Cat 1 & Cat 2 spill) per scaled system length falls above the 75th
   percentile within its size category, in both the 5-year and 12-month
-  rolling averages. Medium and Large systems are additionally evaluated
+  rolling averages.
+
+#### Spill Rate Scaling
+
+Spill counts are not compared as a flat rate per 100 miles for every
+system. Instead, each system's rolling average spill count is divided by
+its own length relative to a size-tiered scale, so that smaller systems
+aren't penalized with an artificially inflated rate simply because a
+fraction of a mile produces an outsized ratio:
+
+| System length | Scaled per |
+|---|---|
+| < 5 miles | 5 miles |
+| 5 to < 25 miles | 25 miles |
+| ≥ 25 miles | 100 miles |
+
+This is implemented in `03_criteria1_spills.R` as:
+
+```r
+scale_miles = case_when(
+  TOTAL_SYS_LENGTH_COMBINED < 5 ~ 5,
+  TOTAL_SYS_LENGTH_COMBINED >= 5 & TOTAL_SYS_LENGTH_COMBINED < 25 ~ 25,
+  TOTAL_SYS_LENGTH_COMBINED >= 25 ~ 100,
+  TRUE ~ NA_real_
+),
+rolling_avg_5yr_scaled = rolling_avg_5yr / (TOTAL_SYS_LENGTH_COMBINED / scale_miles)
+```
+
+(The 12-month rolling average uses the identical scaling logic.)
+
+**Example:** Rio Dell City CS has a 15-mile system and averaged 8.2
+spills/year over the trailing 5-year window. Since 15 miles falls in the
+5–25 mile tier, its rate is scaled per 25 miles:
+  Medium and Large systems are additionally evaluated
   against an absolute numeric standard — a system meeting both of the
   following is exempted from the list regardless of its percentile
   ranking:
   - 5-year rolling average ≤ 2 spills per 100 miles
   - 12-month rolling average ≤ 1 spill per 100 miles
 
+#### GESD Statistical Outlier Test
+
   A Generalized Extreme Studentized Deviate (GESD) test is also run as an
   informational marker, flagging systems whose spill rate is a statistical
   outlier compared with systems of similar length. It does not affect which
   systems are flagged as inadequate.
 
-- **Criteria 2 — Reporting:** A system is flagged if it has not submitted a
-  required Annual Report and has not filed a No Spill Certification.
+### Criteria 2 — Reporting: 
+  A system is flagged if it has not submitted a required Annual Report and has not filed a No Spill Certification.
 
-Systems with active enforcement orders are identified separately as "Under
-Enforcement" and are not included in the combined Inadequacy List produced
-by this pipeline.
+  Systems with active enforcement orders are identified separately as "Under
+  Enforcement" and are not included in the combined Inadequacy List produced
+  by this pipeline.
 
 ## Repository Structure
 
@@ -38,19 +74,23 @@ Scripts are numbered and intended to be run in order:
 | Script | Purpose |
 |---|---|
 | `00_setup.R` | Loads required libraries, sets global variables (analysis period, snapshot controls), and defines helper functions. |
-| `01_load_data.R` | Loads raw data, either from live sources or from an archived snapshot for exact reproducibility. |
+| `01_load_data.R` | Loads raw data; deduplicates Annual Report and SSO Questionnaire submissions to one record per system before joining to spill data; applies data quality corrections (see "Data Quality Corrections" below). |
+| `apply_annual_report_corrections.R` | Sourced by `01_load_data.R`. Automated correction for implausible year-over-year jumps in reported population served. |
+| `apply_manual_length_corrections.R` | Sourced by `01_load_data.R`. Manually reviewed corrections for implausible year-over-year jumps in reported system length. |
 | `02_clean_data.R` | Cleans and standardizes source datasets; derives system size categories and attributes. |
 | `03_criteria1_spills.R` | Applies the spill-performance criteria described above (percentile bands, numeric threshold, GESD). |
 | `04_criteria2_reporting.R` | Applies the reporting criteria (missing Annual Report and No Spill Certification). |
 | `05_enforcement.R` | Loads enforcement order data and builds the combined Inadequacy List from Criteria 1 and 2. |
-| `06_export.R` | Assembles the final comprehensive dataset and exports it to Excel. |
+| `06_inadequacy_export.R` | Assembles the final comprehensive dataset and exports the Inadequacy List to Excel. |
+| `07_enforcement_export.R` | Exports the separate "Under Enforcement" list. |
+| `run_all.R` | Runs `00`–`07` in sequence and sets a dated output folder automatically. See "Running the Pipeline" below. |
 
 ## Requirements
 
 This pipeline uses the following R packages:
 
 ```
-dplyr, readr, lubridate, writexl, tidyr, flextable, officer, zoo, ggplot2, here
+dplyr, readr, lubridate, purrr, writexl, tidyr, flextable, officer, zoo, ggplot2, here
 ```
 
 ## Data
@@ -79,7 +119,9 @@ project-root/
 ├── 03_criteria1_spills.R
 ├── 04_criteria2_reporting.R
 ├── 05_enforcement.R
-├── 06_export.R
+├── 06_inadequacy_export.R
+├── 07_enforcement_export.R
+├── run_all.R
 ├── README.md
 ├── data/
 │   ├── local/                    # Raw input files (you must provide)
@@ -109,27 +151,27 @@ source("02_clean_data.R")
 source("03_criteria1_spills.R")
 source("04_criteria2_reporting.R")
 source("05_enforcement.R")
-source("06_export.R")
+source("06_inadequacy_export.R")
+source("07_enforcement_export.R")
 ```
 
 Console output will show progress and system counts at each step.
 
 ### Option 2: Run All Scripts at Once
 
-Create a `run_all.R` file at the project root:
+This repository includes `run_all.R`, which runs the full pipeline in
+sequence and automatically creates a dated output folder
+(`outputs/inadequacy_revisions_MM_DD_YY/`) based on the date it's run.
 
+```bash
+Rscript run_all.R
+```
+
+Or from within R/RStudio:
 ```r
-# run_all.R — Execute full pipeline in one go
-source("00_setup.R")
-source("01_load_data.R")
-source("02_clean_data.R")
-source("03_criteria1_spills.R")
-source("04_criteria2_reporting.R")
-source("05_enforcement.R")
-source("06_export.R")
+source("run_all.R")
+```
 
-message("\n===== Pipeline Complete =====")
-message("Check outputs/ for results")
 ```
 
 Then run from command line:
@@ -177,12 +219,11 @@ This defines the **time window** for analyzing spills and reports (currently: 20
 
 ## Output Files Generated
 
-After a successful run, you'll find:
+Running `run_all.R` creates a single dated output folder:
+`outputs/inadequacy_revisions_MM_DD_YY/`, containing:
 
-- `outputs/Inadequate_Systems/Inadequate_SSSGO_Systems_Comprehensive_[DATE].xlsx`
-- `outputs/Enforcement_Orders/Under_Enforcement_Only_[DATE].xlsx`
-
-See `OUTPUTS_README.md` for detailed file descriptions.
+- The comprehensive Inadequacy List (Excel)
+- `Under_Enforcement_Systems_<date>.xlsx` — the separate Under Enforcement list
 
 ## Contact
 
