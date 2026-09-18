@@ -314,11 +314,18 @@ NUMERIC_THRESHOLD_5YR_PER_100MI  <- 2  # 5-year rolling avg, spills/100 miles
 NUMERIC_THRESHOLD_12MO_PER_100MI <- 1  # 12-month rolling avg, spills/100 miles
 NUMERIC_THRESHOLD_SIZE_CATEGORIES <- c("Medium", "Large")
 
+# Scaled rates are rounded to 2 decimal places before comparing against the
+# numeric thresholds, so a value like 1.004 (effectively 1, once rounded)
+# is correctly treated as meeting a "<= 1" cutoff rather than narrowly
+# failing it due to floating point precision in the underlying calculation.
+# This rounding is applied only for this threshold comparison - the
+# unrounded values are retained everywhere else (e.g. displayed rates,
+# percentile band calculations).
 numeric_threshold_exempt_systems <- low_perf_both_length_quantiles %>%
   filter(
     Size_Category_Length_final %in% NUMERIC_THRESHOLD_SIZE_CATEGORIES,
-    rolling_avg_5yr_scaled  <= NUMERIC_THRESHOLD_5YR_PER_100MI,
-    rolling_avg_12mo_scaled <= NUMERIC_THRESHOLD_12MO_PER_100MI
+    round(rolling_avg_5yr_scaled, 2)  <= NUMERIC_THRESHOLD_5YR_PER_100MI,
+    round(rolling_avg_12mo_scaled, 2) <= NUMERIC_THRESHOLD_12MO_PER_100MI
   ) %>%
   left_join(Facilities_List %>% select(WDID, FACILITY.NAME), by = "WDID") %>%
   distinct(WDID, FACILITY.NAME, Size_Category_Length_final,
@@ -351,3 +358,8 @@ low_perf_any_metric <- low_perf_both_length_quantiles %>%
 
 message("Criteria 1 complete. Total low performers: ",
         n_distinct(low_perf_any_metric$FACILITY.NAME))
+
+annual_spill_counts_rolling_OLD      <- annual_spill_counts_rolling
+rolling_avg_12mo_length_latest_OLD   <- rolling_avg_12mo_length_latest
+low_perf_both_length_quantiles_OLD   <- low_perf_both_length_quantiles
+numeric_threshold_exempt_systems_OLD <- numeric_threshold_exempt_systems

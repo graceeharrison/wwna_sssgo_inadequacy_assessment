@@ -102,7 +102,17 @@ length_compare <- full_join(length_ar, length_ssoq, by = "WDID") %>%
       NA_real_
     ),
     TOTAL_SYS_LENGTH_FLAG_LARGE_DIFF = TOTAL_SYS_LENGTH_DIFF_PCT > 0.20,
+    # WDIDs with a manually reviewed length correction (see
+    # apply_manual_length_corrections.R) use Total_System_Length_AR
+    # directly, bypassing the automatic AR-vs-SSOQ reconciliation below.
+    # Manual review already resolved any AR/SSOQ disagreement for these
+    # systems; letting the automatic pmin() rule re-evaluate the same
+    # disagreement would silently overwrite that decision (confirmed:
+    # WDID 2SSO10189, Sausalito CS, where manual review set
+    # Total_System_Length_AR = 33.2 despite SSOQ = 11.56, but the
+    # unconditional 20%-diff check was reverting it back toward 11).
     TOTAL_SYS_LENGTH_COMBINED = case_when(
+      WDID %in% manual_length_review$WDID ~ Total_System_Length_AR,
       !is.na(Total_System_Length_AR) & is.na(Total_System_Length_SSOQ) ~ Total_System_Length_AR,
       is.na(Total_System_Length_AR) & !is.na(Total_System_Length_SSOQ) ~ Total_System_Length_SSOQ,
       TOTAL_SYS_LENGTH_FLAG_LARGE_DIFF ~ pmin(Total_System_Length_AR, Total_System_Length_SSOQ),
@@ -177,7 +187,10 @@ supplementary_attributes <- Facilities_List %>%
   left_join(questionnaire_attributes, by = "WDID") %>%
   mutate(
     POP_SERVED_COMBINED = coalesce(POP_SERVED_AR, POP_SERVED_SSOQ),
+    # Same manual-review bypass as length_compare above (Section 5) -
+    # see that comment for the full explanation.
     TOTAL_SYS_LENGTH_COMBINED = case_when(
+      WDID %in% manual_length_review$WDID ~ Total_System_Length_AR,
       !is.na(Total_System_Length_AR) & is.na(Total_System_Length_SSOQ) ~ 
         Total_System_Length_AR,
       is.na(Total_System_Length_AR) & !is.na(Total_System_Length_SSOQ) ~ 

@@ -102,7 +102,54 @@ Facilities_List <- read.csv(FACILITIES_LIST_PATH,
 message("Facilities list loaded: ", nrow(Facilities_List), " rows, ",
         n_distinct(Facilities_List$WDID), " unique WDIDs")
 
-enforcement_orders_CIWQS <- read.csv(ENFORCEMENT_ORDERS_PATH)
+# ----------------------------------------------------------------------------
+# Manual facility resolution
+#
+# A small number of WDIDs have more than one FACILITY.ID row in the source
+# data - typically because the physical facility was re-registered under a
+# new FACILITY.ID at some point, leaving both the old and current records
+# in the export under the same WDID. Left unresolved, any downstream join
+# on WDID fans out to every FACILITY.ID/FACILITY.NAME combination for that
+# WDID.
+#
+# There is no reliable general rule to pick the correct record automatically
+# (e.g. higher FACILITY.ID is not guaranteed to mean "more current," and
+# Facilities_List has no explicit active/historical status field), so each
+# case is resolved manually and documented here.
+#
+# Confirmed case: WDID 9SSO10710 has two FACILITY.ID rows -
+#   256444  "MCB Camp Pendleton Sewage Collection System (Historic)"
+#   631390  "USMC Base, Camp Pendleton CS"
+# 631390 (USMC Base, Camp Pendleton CS) is the current registration to use;
+# 256444 is an old/superseded record for the same WDID.
+# ----------------------------------------------------------------------------
+manual_facility_id_resolution <- tribble(
+  ~WDID,        ~Correct_FACILITY.ID,
+  "9SSO10710",  "631390"
+)
+
+n_facility_dupes_before <- Facilities_List %>%
+  count(WDID) %>%
+  filter(n > 1) %>%
+  nrow()
+
+Facilities_List <- Facilities_List %>%
+  filter(
+    !(WDID %in% manual_facility_id_resolution$WDID) |
+      FACILITY.ID %in% manual_facility_id_resolution$Correct_FACILITY.ID
+  )
+
+n_facility_dupes_after <- Facilities_List %>%
+  count(WDID) %>%
+  filter(n > 1) %>%
+  nrow()
+
+message("  Facilities list: ", n_facility_dupes_before,
+        " WDID(s) had multiple FACILITY.ID rows before manual resolution; ",
+        n_facility_dupes_after, " remain unresolved (review manual_facility_id_resolution if > 0)")
+
+enforcement_orders_CIWQS <- read.csv(ENFORCEMENT_ORDERS_PATH,
+                                     na.strings = c("", "NA", "#N/A"))
 message("  Enforcement orders loaded: ", nrow(enforcement_orders_CIWQS), " rows")
 
 # ============================================================================
@@ -114,21 +161,50 @@ message("Combining datasets...")
 names(Questionnaire_txt) <- toupper(names(Questionnaire_txt))
 
 # --------------------------------------------------------------------------
-# Correct implausible year-over-year jumps in AnnualReports_txt (system
-# length, population served) BEFORE deduplicating to the most recent year.
-# See apply_annual_report_corrections.R for the full rule and rationale.
-# Writes a full audit log so every correction is traceable.
+# Correct implausible year-over-year jumps in AnnualReports_txt.
+#
+# POPULATION SERVED: uses the automated rule (closest to nearest-year
+# SSOQ data, or smallest non-zero if SSOQ unavailable) — see
+# apply_annual_report_corrections.R for full rationale.
+#
+# SYSTEM LENGTH: uses MANUALLY REVIEWED values instead of the automated
+# rule. The automated rule was checked against direct manual review of
+# all flagged systems; in most cases the two agreed, but in a few cases
+# (including WDID 2SSO10189) manual review overrode the automated pick —
+# see apply_manual_length_corrections.R for the full reviewed list and
+# reasoning per system.
+#
+# Both steps run BEFORE deduplicating to the most recent year, and both
+# write a full audit log so every correction is traceable.
 # --------------------------------------------------------------------------
-source(here("R", "apply_annual_report_corrections.R"))
-correction_result <- correct_annual_reports(AnnualReports_txt, Questionnaire_txt)
-AnnualReports_txt <- correction_result$corrected_data
-annual_report_correction_log <- correction_result$correction_log
+source(here("apply_annual_report_corrections.R"))
+source(here("apply_manual_length_corrections.R"))
 
-if (nrow(annual_report_correction_log) > 0) {
-  write.csv(annual_report_correction_log,
-            here("outputs", "annual_report_correction_log.csv"),
+# Population correction (automated)
+pop_correction_result <- correct_annual_reports(AnnualReports_txt, Questionnaire_txt)
+AnnualReports_txt <- pop_correction_result$corrected_data
+annual_report_pop_correction_log <- pop_correction_result$correction_log %>%
+  filter(Field == "POP_SERVED_AR")
+
+# System length correction (manual review)
+length_correction_result <- apply_manual_length_corrections(AnnualReports_txt)
+AnnualReports_txt <- length_correction_result$corrected_data
+annual_report_length_correction_log <- length_correction_result$correction_log
+
+if (nrow(annual_report_pop_correction_log) > 0) {
+  write.csv(annual_report_pop_correction_log,
+            here("outputs", "annual_report_population_correction_log.csv"),
             row.names = FALSE)
-  message("  Correction log saved to: ", here("outputs", "annual_report_correction_log.csv"))
+  message("  Population correction log saved to: ",
+          here("outputs", "annual_report_population_correction_log.csv"))
+}
+
+if (nrow(annual_report_length_correction_log) > 0) {
+  write.csv(annual_report_length_correction_log,
+            here("outputs", "annual_report_length_correction_log.csv"),
+            row.names = FALSE)
+  message("  Length correction log saved to: ",
+          here("outputs", "annual_report_length_correction_log.csv"))
 }
 
 # Each WDID can have multiple annual report / questionnaire submissions on
