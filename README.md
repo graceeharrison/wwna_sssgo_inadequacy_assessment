@@ -12,8 +12,11 @@ independent criteria:
 ### Criteria 1 — Spill Performance: 
   A system is flagged as Low Performing
   if its spill count (only includes Cat 1 & Cat 2 spill) per scaled system length falls above the 75th
-  percentile within its size category, in both the 5-year and 12-month
-  rolling averages.
+  percentile within its size category on both the 5-year rolling average and
+  the 12-month spill rate. The 12-month rate is the total number of spills in
+  the final 12 months of the analysis period (January-December 2025), scaled as
+  described below, so it is an annual rate in the same units as the 5-year
+  average.
 
 #### Spill Rate Scaling
 
@@ -41,17 +44,20 @@ scale_miles = case_when(
 rolling_avg_5yr_scaled = rolling_avg_5yr / (TOTAL_SYS_LENGTH_COMBINED / scale_miles)
 ```
 
-(The 12-month rolling average uses the identical scaling logic.)
+(The 12-month rate uses the identical scaling logic, applied to the total spills
+in January-December 2025.)
 
-**Example:** Rio Dell City CS has a 15-mile system and averaged 8.2
-spills/year over the trailing 5-year window. Since 15 miles falls in the
-5–25 mile tier, its rate is scaled per 25 miles:
+**Example:** A system with 15 miles of sewer that averaged 8.2 spills/year
+over the 5-year window falls in the 5 to < 25 mile tier, so its rate is scaled
+per 25 miles: 8.2 / (15 / 25) = 13.7 scaled spills per year. (Illustrative
+numbers only.)
+
   Medium and Large systems are additionally evaluated
   against an absolute numeric standard — a system meeting both of the
   following is exempted from the list regardless of its percentile
   ranking:
   - 5-year rolling average ≤ 2 spills per 100 miles
-  - 12-month rolling average ≤ 1 spill per 100 miles
+  - 12-month spill rate (January-December 2025) ≤ 1 spill per 100 miles
 
 #### GESD Statistical Outlier Test
 

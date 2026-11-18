@@ -16,6 +16,7 @@
 # Small and Micro systems are governed by the percentile bands only. See
 # PART 1, Section 4 below.
 #
+#
 # GESD test is run after the numeric standard above, as an informational
 # marker only — it does NOT determine which systems are low performing. See
 # PART 1, Section 5 below.
@@ -159,65 +160,36 @@ message("  5yr length low performers identified: ",
         nrow(low_performing_systems_5yr_length))
 
 # ----------------------------------------------------------------------------
-# 2. 12-Month Rolling Average - System Length / Spill Counts
+# 2. 12-Month Spill Rate (January-December 2025) - System Length / Spill Counts
+#
+#   rolling_avg_12mo        = total spills in the 12-month period
+#   YearMonth               = first day of the last month of the period
 # ----------------------------------------------------------------------------
 
-Cat_spills_AnnualReports_combined_with_attrs <- Cat_spills_AnnualReports_combined %>%
-  filter(WDID %in% Facilities_List$WDID) %>%
-  mutate(
-    ESTIMATED_SPILL_START_DATE_AND_TIME = as.Date(
-      ESTIMATED_SPILL_START_DATE_AND_TIME, format = "%m/%d/%Y %H:%M")
+TWELVE_MONTH_END_EXCL <- ANALYSIS_PERIOD_END                       # 2026-01-01 (exclusive)
+TWELVE_MONTH_START    <- ANALYSIS_PERIOD_END - lubridate::years(1) # 2025-01-01
+TWELVE_MONTH_YEAR     <- lubridate::year(TWELVE_MONTH_START)       # 2025
+
+message("  12-month period: ", format(TWELVE_MONTH_START), " to ",
+        format(TWELVE_MONTH_END_EXCL - 1))
+
+if (!TWELVE_MONTH_YEAR %in% annual_spill_counts_complete$Year) {
+  stop("No spill data found for ", TWELVE_MONTH_YEAR,
+       " - cannot build the 12-month measure.")
+}
+
+# annual_spill_counts_complete (built in Section 1) already holds one row per
+# system per calendar year with zero-filled counts from cat1_2_3_clean and
+# sso_clean, so the 12-month period is simply that calendar year.
+rolling_avg_12mo_length_latest <- annual_spill_counts_complete %>%
+  filter(Year == TWELVE_MONTH_YEAR) %>%
+  transmute(
+    WDID,
+    TOTAL_SYS_LENGTH_COMBINED,
+    Size_Category_Length,
+    YearMonth = as.Date(paste0(TWELVE_MONTH_YEAR, "-12-01")),
+    rolling_avg_12mo = spill_count
   ) %>%
-  filter(!is.na(ESTIMATED_SPILL_START_DATE_AND_TIME)) %>%
-  left_join(
-    recent_attributes %>%
-      select(WDID, TOTAL_SYS_LENGTH_COMBINED, Size_Category_Length),
-    by = "WDID"
-  )
-
-monthly_spill_counts <- Cat_spills_AnnualReports_combined_with_attrs %>%
-  mutate(YearMonth = floor_date(ESTIMATED_SPILL_START_DATE_AND_TIME, "month")) %>%
-  group_by(WDID, YearMonth, TOTAL_SYS_LENGTH_COMBINED, Size_Category_Length) %>%
-  summarise(spill_count_raw = n(), .groups = "drop") %>%
-  arrange(WDID, YearMonth)
-
-monthly_spill_counts_filled <- monthly_spill_counts %>%
-  group_by(WDID, TOTAL_SYS_LENGTH_COMBINED) %>%
-  summarise(
-    min_month = min(YearMonth),
-    max_month = max(YearMonth),
-    .groups = "drop"
-  ) %>%
-  rowwise() %>%
-  mutate(month_seq = list(seq(min_month, max_month, by = "month"))) %>%
-  ungroup() %>%
-  select(WDID, TOTAL_SYS_LENGTH_COMBINED, month_seq) %>%
-  unnest(month_seq) %>%
-  rename(YearMonth = month_seq) %>%
-  left_join(monthly_spill_counts,
-            by = c("WDID", "TOTAL_SYS_LENGTH_COMBINED", "YearMonth")) %>%
-  mutate(spill_count_raw = replace_na(spill_count_raw, 0)) %>%
-  arrange(WDID, YearMonth)
-
-rolling_avg_12mo_length <- monthly_spill_counts_filled %>%
-  group_by(WDID, TOTAL_SYS_LENGTH_COMBINED) %>%
-  arrange(YearMonth) %>%
-  mutate(
-    rolling_avg_12mo = rollapply(
-      spill_count_raw,
-      width = 12,
-      FUN = mean,
-      align = "right",
-      fill = NA,
-      na.rm = TRUE
-    )
-  ) %>%
-  filter(!is.na(rolling_avg_12mo))
-
-rolling_avg_12mo_length_latest <- rolling_avg_12mo_length %>%
-  group_by(WDID, TOTAL_SYS_LENGTH_COMBINED) %>%
-  slice_max(YearMonth, with_ties = FALSE) %>%
-  ungroup() %>%
   mutate(
     scale_miles = case_when(
       TOTAL_SYS_LENGTH_COMBINED < 5 ~ 5,
@@ -303,11 +275,9 @@ message("  Systems low performing in both length metrics: ",
 #
 # Per the 2026-07-16 WWNA Project Team memo, Medium and Large systems are
 # removed from the spill-based Inadequacy List when they meet BOTH numeric
-# thresholds below (AND logic — the memo's recommended, stricter option,
-# not the more inclusive OR logic shown in the memo's Table 2). This is
-# evaluated only among systems already flagged as Low Performing in both
-# rolling windows above; it does not change how the 75th-percentile bands
-# themselves are computed.
+# thresholds below. This is evaluated only among systems already flagged as 
+# Low Performing in both rolling windows above; it does not change how the 
+# 75th-percentile bands themselves are computed.
 # ----------------------------------------------------------------------------
 
 NUMERIC_THRESHOLD_5YR_PER_100MI  <- 2  # 5-year rolling avg, spills/100 miles
